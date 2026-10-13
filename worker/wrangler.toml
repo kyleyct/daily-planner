@@ -6,8 +6,8 @@ workers_dev = true
 # KV: subscription + schedule only (no goal content)
 [[kv_namespaces]]
 binding = "SUBS"
-id = "REPLACE_AFTER_KV_CREATE"
-preview_id = "REPLACE_AFTER_KV_CREATE"
+id = "13a4420b7706459bbb8d5dd96ef077c0"
+preview_id = "13a4420b7706459bbb8d5dd96ef077c0"
 
 # Public VAPID key (safe to expose). Private key + subject are secrets.
 [vars]
