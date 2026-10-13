@@ -266,6 +266,10 @@ input[type=date]{color-scheme:dark}
 (function(){
 'use strict';
 var KEY='kylePlanner.v1';
+/* Cloudflare Worker base URL for Web Push (no trailing slash).
+   Set after `wrangler deploy` — e.g. https://daily-planner-push.<account>.workers.dev
+   Empty string disables remote subscribe until configured. */
+var PUSH_API = '';
 var CATS=['工作','家庭','娛樂'];
 var WEEK=['日','一','二','三','四','五','六'];
 var ICON_PLAY='<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
@@ -288,7 +292,7 @@ function nowHM(){var d=new Date();return pad(d.getHours())+':'+pad(d.getMinutes(
 /* ---------- data ---------- */
 function defaults(){return {
   version:1,
-  settings:{startHour:7,endHour:23,work:25,brk:5},
+  settings:{startHour:7,endHour:23,work:25,brk:5,morningTime:'08:00',eveningTime:'21:00',morningOn:true,eveningOn:true,tz:'Asia/Hong_Kong',pushOn:false},
   wishes:[], inbox:[], days:{}, events:[],
   ui:{mode:'day',sub:{day:'goals',night:'review'},wishFilter:'all',newCat:'工作',dismissed:{}},
   pomo:{phase:'work',running:false,endAt:0,remaining:25*60,goalId:''}
@@ -534,11 +538,23 @@ function eventsHTML(){
   return h+'</section>';
 }
 function renderBanners(){
-  var t=todayKey(), dis=S.ui.dismissed||{};
+  var t=todayKey(), dis=S.ui.dismissed||{}, parts=[];
+  var now=new Date(), hm=now.getHours()*60+now.getMinutes();
+  var mSlot=hmToMin(S.settings.morningTime||'08:00'), eSlot=hmToMin(S.settings.eveningTime||'21:00');
+  var d=peek(t), hasGoals=d.goals&&d.goals.length>0;
+  var rev=d.review||{}, hasReview=!!((rev.done||'')+(rev.why||'')+(rev.improve||'')).trim();
+  if(S.settings.morningOn!==false&&mSlot!=null&&hm>=mSlot&&hm<mSlot+120&&!hasGoals&&dis['habit-morning']!==t){
+    parts.push('<div class="banner"><div class="t"><b>訂今日目標</b>花兩分鐘寫下今日目標。習慣比完成多少更重要。</div><button class="ghost" data-act="goHabit" data-v="morning">去寫目標</button><button class="ghost" data-act="dismiss" data-id="habit-morning">稍後</button></div>');
+  }
+  if(S.settings.eveningOn!==false&&eSlot!=null&&hm>=eSlot&&hm<eSlot+120&&!hasReview&&dis['habit-evening']!==t){
+    parts.push('<div class="banner"><div class="t"><b>今晚檢討</b>回顧今日。檢討與計劃比分數重要。</div><button class="ghost" data-act="goHabit" data-v="evening">去檢討</button><button class="ghost" data-act="dismiss" data-id="habit-evening">稍後</button></div>');
+  }
   var list=sortedEvents().filter(function(e){return evInPrep(e)&&dis[e.id]!==t;});
-  $('banners').innerHTML=list.map(function(e){var l=evLeft(e);
-    return '<div class="banner"><div class="t"><b>「'+esc(e.name)+'」</b>'+(l===0?'就是今日。':leftText(l)+'，是時候開始準備。')+'</div><button class="ghost" data-act="dismiss" data-id="'+e.id+'">知道了</button></div>';}).join('');
+  parts=parts.concat(list.map(function(e){var l=evLeft(e);
+    return '<div class="banner"><div class="t"><b>「'+esc(e.name)+'」</b>'+(l===0?'就是今日。':leftText(l)+'，是時候開始準備。')+'</div><button class="ghost" data-act="dismiss" data-id="'+e.id+'">知道了</button></div>';}));
+  $('banners').innerHTML=parts.join('');
 }
+function hmToMin(hm){var m=/^(\d{2}):(\d{2})$/.exec(hm||'');return m?parseInt(m[1],10)*60+parseInt(m[2],10):null;}
 
 /* ---------- dock ---------- */
 function dockHTML(){
@@ -554,11 +570,28 @@ function openModal(title,fn){modalFn=fn;$('modalTitle').textContent=title;$('mod
 function closeModal(){modalFn=null;$('modal').hidden=true;$('modalBody').innerHTML='';}
 function settingsHTML(){
   var opts=function(sel,from,to){var o='';for(var i=from;i<=to;i++) o+='<option value="'+i+'"'+(+sel===i?' selected':'')+'>'+pad(i)+':00</option>';return o;};
-  return '<h3 style="margin-top:0">時間表時段</h3><div class="grid2"><label class="field"><span>由</span><select data-bind="startHour">'+opts(S.settings.startHour,0,23)+'</select></label>'+
-    '<label class="field"><span>至</span><select data-bind="endHour">'+opts(S.settings.endHour,0,23)+'</select></label></div>'+
-    '<h3>備份</h3><p class="hint" style="margin:0 0 12px">資料只儲存在這部裝置的瀏覽器內（不會上傳到伺服器）。清瀏覽器資料、換裝置或用私密模式都可能遺失，請定期匯出 JSON 備份。</p>'+
+  var st=S.settings;
+  var pushStatus=pushStatusText();
+  return '<h3 style="margin-top:0">時間表時段</h3><div class="grid2"><label class="field"><span>由</span><select data-bind="startHour">'+opts(st.startHour,0,23)+'</select></label>'+
+    '<label class="field"><span>至</span><select data-bind="endHour">'+opts(st.endHour,0,23)+'</select></label></div>'+
+    '<h3>習慣提醒（推送）</h3>'+
+    '<p class="hint" style="margin:0 0 12px">早上提醒你訂今日目標、晚上提醒你檢討。習慣與計劃比完成多少更重要。時間以香港時間（Asia/Hong_Kong）為準。目標內容不會上傳，伺服器只存推送訂閱與提醒時間。</p>'+
+    '<div class="grid2">'+
+      '<label class="field"><span>早上</span><input type="time" data-bind="morningTime" value="'+esc(st.morningTime||'08:00')+'"></label>'+
+      '<label class="field"><span>晚上</span><input type="time" data-bind="eveningTime" value="'+esc(st.eveningTime||'21:00')+'"></label>'+
+    '</div>'+
+    '<div class="btnrow" style="margin:8px 0 12px">'+
+      '<label style="display:flex;align-items:center;gap:8px;font-size:16px;color:var(--muted)"><input type="checkbox" data-bind="morningOn"'+(st.morningOn!==false?' checked':'')+'> 早上提醒</label>'+
+      '<label style="display:flex;align-items:center;gap:8px;font-size:16px;color:var(--muted)"><input type="checkbox" data-bind="eveningOn"'+(st.eveningOn!==false?' checked':'')+'> 晚上提醒</label>'+
+    '</div>'+
+    '<p class="hint" id="pushStatus" style="margin:0 0 12px">'+esc(pushStatus)+'</p>'+
+    '<div class="btnrow">'+
+      '<button class="btn gold" data-act="enablePush">開啟推送提醒</button>'+
+      '<button class="btn quiet" data-act="disablePush">關閉推送</button>'+
+    '</div>'+
+    '<h3>備份</h3><p class="hint" style="margin:0 0 12px">目標、時間表、檢討等資料只儲存在這部裝置的瀏覽器內。清瀏覽器資料、換裝置或用私密模式都可能遺失，請定期匯出 JSON 備份。推送訂閱只含端點與提醒時間，不含你的目標內容。</p>'+
     '<div class="btnrow"><button class="btn gold" data-act="exportData">匯出備份（JSON）</button><button class="btn" data-act="importData">匯入備份</button></div>'+
-    '<h3>安裝</h3><p class="hint" style="margin:0 0 12px" id="installHint">可安裝到主畫面，像 App 一樣離線使用。資料仍然只在本機。</p>'+
+    '<h3>安裝</h3><p class="hint" style="margin:0 0 12px" id="installHint">可安裝到主畫面，像 App 一樣離線使用。資料仍然只在本機。iOS 需用 Safari「加入主畫面」後，推送才較可靠。</p>'+
     '<div class="btnrow" id="installRow" hidden><button class="btn gold" data-act="installPwa">安裝到主畫面</button></div>'+
     '<h3>其他</h3><div class="btnrow"><button class="btn quiet small" data-act="clearAll">清除所有資料</button></div>';
 }
@@ -574,6 +607,130 @@ function historyHTML(){
     [['done','完成了甚麼'],['why','未完成的原因'],['improve','如何改善']].forEach(function(f){if((r[f[0]]||'').trim()) h+='<div class="q">'+f[1]+'</div><div class="a">'+esc(r[f[0]])+'</div>';});
     return h+'</div>';
   }).join('');
+}
+
+
+/* ---------- Web Push habits ---------- */
+function schedulePayload(){
+  var st=S.settings;
+  return {
+    morning: st.morningTime||'08:00',
+    evening: st.eveningTime||'21:00',
+    morningOn: st.morningOn!==false,
+    eveningOn: st.eveningOn!==false,
+    tz: st.tz||'Asia/Hong_Kong'
+  };
+}
+function isStandalone(){
+  return (window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||!!window.navigator.standalone;
+}
+function isIos(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+}
+function pushSupported(){
+  return !!(PUSH_API&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window);
+}
+function pushStatusText(){
+  if(!PUSH_API) return '推送後端尚未設定（PUSH_API）。部署 Cloudflare Worker 後再啟用。';
+  if(!('Notification' in window)||!('PushManager' in window)) return '瀏覽器不支援網頁推送。';
+  if(isIos()&&!isStandalone()) return '需安裝到主畫面（iOS Safari → 分享 → 加入主畫面）後才能開啟推送。';
+  if(S.settings.pushOn&&Notification.permission==='granted') return '已開啟推送提醒。可在上方調整早上／晚上時間。';
+  if(Notification.permission==='denied') return '通知權限被拒絕。請到系統／瀏覽器設定允許通知後再試。';
+  return '尚未開啟推送。按「開啟推送提醒」允許通知並同步時間到伺服器。';
+}
+function urlBase64ToUint8Array(base64String){
+  var padding='='.repeat((4-base64String.length%4)%4);
+  var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+  var raw=atob(base64);
+  var out=new Uint8Array(raw.length);
+  for(var i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+  return out;
+}
+function openHabitMode(kind){
+  if(kind==='evening'){S.ui.mode='night';S.ui.sub.night='review';}
+  else{S.ui.mode='day';S.ui.sub.day='goals';}
+  save();render();window.scrollTo(0,0);
+}
+function applyHashRoute(){
+  var h=(location.hash||'').replace(/^#/, '');
+  if(h==='night/review'||h==='evening') openHabitMode('evening');
+  else if(h==='day/goals'||h==='morning') openHabitMode('morning');
+}
+async function fetchVapidPublicKey(){
+  var r=await fetch(PUSH_API+'/vapidPublicKey');
+  if(!r.ok) throw new Error('vapid');
+  var j=await r.json();
+  if(!j.publicKey) throw new Error('no key');
+  return j.publicKey;
+}
+async function syncScheduleToWorker(){
+  if(!PUSH_API||!S.settings.pushOn) return;
+  try{
+    var reg=await navigator.serviceWorker.ready;
+    var sub=await reg.pushManager.getSubscription();
+    if(!sub) return;
+    await fetch(PUSH_API+'/schedule',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({endpoint:sub.endpoint,subscription:sub.toJSON(),schedule:schedulePayload()})
+    });
+  }catch(e){console.warn('schedule sync failed',e);}
+}
+async function enablePushFlow(){
+  if(!PUSH_API){toast('推送後端尚未設定。');return;}
+  if(!pushSupported()){toast(isIos()&&!isStandalone()?'請先加入主畫面再開啟推送。':'瀏覽器不支援推送。');return;}
+  try{
+    var perm=Notification.permission;
+    if(perm!=='granted'){
+      perm=await Notification.requestPermission();
+    }
+    if(perm!=='granted'){toast('需要允許通知才能開啟提醒。');refreshPushStatus();return;}
+    var reg=await navigator.serviceWorker.ready;
+    var key=await fetchVapidPublicKey();
+    var sub=await reg.pushManager.subscribe({
+      userVisibleOnly:true,
+      applicationServerKey:urlBase64ToUint8Array(key)
+    });
+    var res=await fetch(PUSH_API+'/subscribe',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({subscription:sub.toJSON(),schedule:schedulePayload()})
+    });
+    if(!res.ok) throw new Error('subscribe '+res.status);
+    S.settings.pushOn=true;save();
+    toast('已開啟推送提醒。');
+    refreshPushStatus();
+  }catch(e){
+    console.warn(e);
+    toast('開啟推送失敗，請稍後再試。');
+    refreshPushStatus();
+  }
+}
+async function disablePushFlow(){
+  try{
+    if('serviceWorker' in navigator){
+      var reg=await navigator.serviceWorker.ready;
+      var sub=await reg.pushManager.getSubscription();
+      if(sub){
+        if(PUSH_API){
+          try{
+            await fetch(PUSH_API+'/unsubscribe',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({endpoint:sub.endpoint})
+            });
+          }catch(e){}
+        }
+        await sub.unsubscribe();
+      }
+    }
+  }catch(e){}
+  S.settings.pushOn=false;save();
+  toast('已關閉推送提醒。');
+  refreshPushStatus();
+}
+function refreshPushStatus(){
+  var el=$('pushStatus'); if(el) el.textContent=pushStatusText();
 }
 
 /* ---------- actions ---------- */
@@ -640,6 +797,7 @@ var A={
   },
   delEvent:function(el){var e=S.events.find(function(x){return x.id===el.dataset.id;});if(!e||!confirm('刪除事件「'+e.name+'」？'))return;S.events=S.events.filter(function(x){return x.id!==e.id;});save();render();},
   dismiss:function(el){S.ui.dismissed[el.dataset.id]=todayKey();save();render();},
+  goHabit:function(el){openHabitMode(el.dataset.v==='evening'?'evening':'morning');},
   settings:function(){openModal('設定／備份',settingsHTML);},
   exportData:function(){
     var blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
@@ -649,6 +807,8 @@ var A={
   importData:function(){$('importFile').value='';$('importFile').click();},
   clearAll:function(){if(!confirm('確定清除所有資料？此操作不能還原。建議先匯出備份。'))return;if(!confirm('再確認一次：真的清除所有資料？'))return;S=defaults();save();closeModal();render();toast('已清除所有資料。');},
   installPwa:function(){if(window.__deferredPrompt){window.__deferredPrompt.prompt();window.__deferredPrompt.userChoice.then(function(){window.__deferredPrompt=null;var r=$('installRow');if(r)r.hidden=true;});}else{toast('請用瀏覽器選單「加入主畫面／安裝應用程式」。');}},
+  enablePush:function(){enablePushFlow();},
+  disablePush:function(){disablePushFlow();},
   closeModal:function(){closeModal();}
 };
 
@@ -682,6 +842,12 @@ document.addEventListener('change',function(e){
     S.settings[b]=n; var p=S.pomo; if(!p.running&&((b==='work')===(p.phase==='work'))) p.remaining=n*60;
     save();render();
   } else if(b==='pomoGoal'){S.pomo.goalId=el.value;save();}
+  else if(b==='morningTime'||b==='eveningTime'){
+    var t=el.value; if(!/^\d{2}:\d{2}$/.test(t)) return;
+    S.settings[b]=t; save(); syncScheduleToWorker(); refreshPushStatus();
+  } else if(b==='morningOn'||b==='eveningOn'){
+    S.settings[b]=!!el.checked; save(); syncScheduleToWorker(); refreshPushStatus();
+  }
 });
 $('importFile').addEventListener('change',function(){
   var f=this.files&&this.files[0]; if(!f) return;
@@ -720,8 +886,16 @@ function tick(){
 }
 document.addEventListener('visibilitychange',function(){if(!document.hidden)tick();});
 if(S.pomo.running&&pomoRemaining()<=0){ /* finished while page was closed */ }
+applyHashRoute();
 render();
 setInterval(tick,1000);
+window.addEventListener('hashchange',applyHashRoute);
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message',function(ev){
+    var d=ev.data||{};
+    if(d.type==='habit-open') openHabitMode(d.kind==='evening'?'evening':'morning');
+  });
+}
 
 /* ---------- PWA (http/https only; safe on file://) ---------- */
 window.__deferredPrompt=null;

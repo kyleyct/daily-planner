@@ -1,0 +1,21 @@
+{
+  "name": "daily-planner-push",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker: Web Push habit reminders for Daily Planner",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "@pushforge/builder": "^2.0.5"
+  },
+  "devDependencies": {
+    "wrangler": "3.99.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,18 @@
+name = "daily-planner-push"
+main = "src/index.js"
+compatibility_date = "2026-04-01"
+workers_dev = true
+
+# KV: subscription + schedule only (no goal content)
+[[kv_namespaces]]
+binding = "SUBS"
+id = "REPLACE_AFTER_KV_CREATE"
+preview_id = "REPLACE_AFTER_KV_CREATE"
+
+# Public VAPID key (safe to expose). Private key + subject are secrets.
+[vars]
+VAPID_PUBLIC_KEY = "BC9r3lrRXItKI_l-HicowO4Ms11L1bAsS9lccWMUewJbDRBsJbCSAGsNrx-OMgQK4UUj__TQM14XhjsOLdG9H24"
+
+# Cron every 5 minutes — matches morning/evening windows in Asia/Hong_Kong
+[triggers]
+crons = ["*/5 * * * *"]
