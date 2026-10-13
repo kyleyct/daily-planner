@@ -1,0 +1,32 @@
+{
+  "name": "每日計劃",
+  "short_name": "每日計劃",
+  "description": "個人每日計劃：目標、時間表、番茄鐘、事件倒數。資料只存於本機瀏覽器。",
+  "lang": "zh-Hant-HK",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7fbfb",
+  "theme_color": "#0d9488",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
